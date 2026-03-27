@@ -1,5 +1,5 @@
 # ==========================================
-# STREAMLIT MULTI-DATABASE LITERATURE SCRAPER (FULL UPDATED)
+# STREAMLIT MULTI-DATABASE LITERATURE SCRAPER (ROBUST UPDATED)
 # ==========================================
 
 import streamlit as st
@@ -38,15 +38,9 @@ max_results = st.sidebar.number_input("Max Results (≤1000)", min_value=10, max
 
 databases = st.sidebar.multiselect(
     "Select Databases",
-    ["Google Scholar", "Crossref", "OpenAlex", "Semantic Scholar", "PubMed", "Scopus (API Key required)"],
+    ["Google Scholar", "Crossref", "OpenAlex", "Semantic Scholar", "PubMed"],
     default=["Crossref", "OpenAlex"]
 )
-
-scopus_key = ""
-if "Scopus (API Key required)" in databases:
-    scopus_key = st.sidebar.text_input("Enter Scopus API Key", type="password")
-    if not scopus_key:
-        st.warning("Scopus selected: Please enter your API key.")
 
 start_btn = st.sidebar.button("🚀 Run Search")
 
@@ -56,101 +50,129 @@ start_btn = st.sidebar.button("🚀 Run Search")
 def scrape_crossref(query, max_results):
     url = f"https://api.crossref.org/works?query={urllib.parse.quote(query)}&rows={max_results}"
     r = requests.get(url).json()
-    results = []
-    for item in r['message']['items']:
-        results.append({
-            "Title": item.get("title", [""])[0],
-            "Authors": ", ".join([a.get("family",""
-) for a in item.get("author",[])]),
-            "Year": item.get("issued", {}).get("date-parts", [[None]])[0][0],
-            "Journal": item.get("container-title", [""])[0],
-            "Citations": item.get("is-referenced-by-count", 0) or 0,
-            "Link": item.get("URL", "")
-        })
-    return results
+    return [{
+        "Title": item.get("title", [""])[0],
+        "Authors": ", ".join([a.get("family","") for a in item.get("author",[])]),
+        "Year": item.get("issued", {}).get("date-parts", [[None]])[0][0],
+        "Journal": item.get("container-title", [""])[0],
+        "Citations": item.get("is-referenced-by-count", 0) or 0,
+        "Link": item.get("URL", "")
+    } for item in r['message']['items']]
+
 
 def scrape_openalex(query, max_results):
     url = f"https://api.openalex.org/works?search={urllib.parse.quote(query)}&per-page={max_results}"
     r = requests.get(url).json()
-    results = []
-    for item in r['results']:
-        results.append({
-            "Title": item.get("title"),
-            "Authors": ", ".join([a['author']['display_name'] for a in item.get('authorships',[])]),
-            "Year": item.get("publication_year"),
-            "Journal": item.get("host_venue", {}).get("display_name"),
-            "Citations": item.get("cited_by_count", 0) or 0,
-            "Link": item.get("id")
-        })
-    return results
+    return [{
+        "Title": item.get("title"),
+        "Authors": ", ".join([a['author']['display_name'] for a in item.get('authorships',[])]),
+        "Year": item.get("publication_year"),
+        "Journal": item.get("host_venue", {}).get("display_name"),
+        "Citations": item.get("cited_by_count", 0) or 0,
+        "Link": item.get("id")
+    } for item in r['results']]
+
 
 def scrape_semantic(query, max_results):
     url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={urllib.parse.quote(query)}&limit={max_results}&fields=title,authors,year,citationCount,url"
     r = requests.get(url).json()
-    results = []
-    for item in r.get("data", []):
-        results.append({
-            "Title": item.get("title"),
-            "Authors": ", ".join([a.get("name") for a in item.get("authors",[])]),
-            "Year": item.get("year"),
-            "Journal": "",
-            "Citations": item.get("citationCount", 0) or 0,
-            "Link": item.get("url")
-        })
-    return results
+    return [{
+        "Title": item.get("title"),
+        "Authors": ", ".join([a.get("name") for a in item.get("authors",[])]),
+        "Year": item.get("year"),
+        "Journal": "",
+        "Citations": item.get("citationCount", 0) or 0,
+        "Link": item.get("url")
+    } for item in r.get("data", [])]
+
 
 def scrape_pubmed(query, max_results):
     url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmax={max_results}&term={urllib.parse.quote(query)}&retmode=json"
     ids = requests.get(url).json()["esearchresult"]["idlist"]
-    return [{"Title": f"PubMed ID {pid}", "Authors": "", "Year": "", "Journal": "", "Citations": 0, "Link": f"https://pubmed.ncbi.nlm.nih.gov/{pid}/"} for pid in ids]
+    return [{
+        "Title": f"PubMed ID {pid}",
+        "Authors": "",
+        "Year": "",
+        "Journal": "",
+        "Citations": 0,
+        "Link": f"https://pubmed.ncbi.nlm.nih.gov/{pid}/"
+    } for pid in ids]
+
 
 def scrape_scholar(query, year_low, year_high, max_results):
     session = requests.Session()
     headers = {"User-Agent": "Mozilla/5.0"}
+
+    # warm-up
     session.get("https://scholar.google.com", headers=headers)
-    time.sleep(random.uniform(20, 35))
+    time.sleep(random.uniform(30, 45))
 
     results = []
     progress = st.progress(0)
+
     for start in range(0, max_results, 10):
         encoded = urllib.parse.quote_plus(query)
         url = f"https://scholar.google.com/scholar?q={encoded}&as_ylo={year_low}&as_yhi={year_high}&start={start}"
-        r = session.get(url, headers=headers)
-        soup = BeautifulSoup(r.text, "html.parser")
-        listings = soup.select(".gs_r.gs_or.gs_scl")
 
-        for item in listings:
-            title_tag = item.select_one(".gs_rt")
-            authors_tag = item.select_one(".gs_a")
-            snippet_tag = item.select_one(".gs_rs")
-            footer_links = item.select(".gs_fl a")
+        try:
+            r = session.get(url, headers=headers, timeout=15)
+            html = r.text.lower()
 
-            authors, year, journal, citations = "N/A", "N/A", "N/A", 0
-            if authors_tag:
-                parts = authors_tag.text.split("-")
-                authors = parts[0].strip() if len(parts)>0 else "N/A"
-                if len(parts)>1:
-                    year_match = re.search(r"\b(19|20)\d{2}\b", parts[1])
-                    if year_match: year = year_match.group()
-                    journal = parts[1].strip()
-            for a in footer_links:
-                if "Cited by" in a.text:
-                    try: citations = int(a.text.replace("Cited by",""))
-                    except: citations = 0
+            # 🚨 BLOCK DETECTION
+            if "captcha" in html or "unusual traffic" in html:
+                st.error("🚨 Google Scholar blocked the request (CAPTCHA detected).")
+                break
 
-            results.append({
-                "Title": title_tag.text if title_tag else "",
-                "Authors": authors,
-                "Year": year,
-                "Journal": journal,
-                "Citations": citations,
-                "Link": title_tag.find("a")["href"] if title_tag and title_tag.find("a") else "",
-                "Abstract": snippet_tag.text if snippet_tag else ""
-            })
+            soup = BeautifulSoup(r.text, "html.parser")
+            listings = soup.select(".gs_r.gs_or.gs_scl")
 
-        st.write(f"Scraped {len(results)} / {max_results} articles...")
-        progress.progress(min(len(results)/max_results,1.0))
-        time.sleep(random.uniform(35,60))
+            if not listings:
+                st.warning("⚠️ No results found or blocked.")
+                break
+
+            for item in listings:
+                title_tag = item.select_one(".gs_rt")
+                authors_tag = item.select_one(".gs_a")
+                snippet_tag = item.select_one(".gs_rs")
+                footer_links = item.select(".gs_fl a")
+
+                authors, year, journal, citations = "N/A", "N/A", "N/A", 0
+
+                if authors_tag:
+                    parts = authors_tag.text.split("-")
+                    authors = parts[0].strip() if len(parts) > 0 else "N/A"
+                    if len(parts) > 1:
+                        year_match = re.search(r"\b(19|20)\d{2}\b", parts[1])
+                        if year_match:
+                            year = year_match.group()
+                        journal = parts[1].strip()
+
+                for a in footer_links:
+                    if "Cited by" in a.text:
+                        try:
+                            citations = int(a.text.replace("Cited by", "").strip())
+                        except:
+                            citations = 0
+
+                results.append({
+                    "Title": title_tag.text if title_tag else "",
+                    "Authors": authors,
+                    "Year": year,
+                    "Journal": journal,
+                    "Citations": citations or 0,
+                    "Link": title_tag.find("a")["href"] if title_tag and title_tag.find("a") else "",
+                    "Abstract": snippet_tag.text if snippet_tag else ""
+                })
+
+            # ✅ REAL PROGRESS
+            progress.progress(min(len(results) / max_results, 1.0))
+            st.write(f"Scraped {len(results)} / {max_results} articles...")
+
+            time.sleep(random.uniform(20, 40))
+
+        except Exception as e:
+            st.error(f"❌ Error during scraping: {e}")
+            break
 
     return results
 
@@ -177,6 +199,7 @@ if start_btn and query:
 
         df = pd.DataFrame(all_results)
 
+        # ✅ ENSURE CITATIONS EXISTS
         if "Citations" not in df.columns:
             df["Citations"] = 0
         df["Citations"] = pd.to_numeric(df["Citations"], errors="coerce").fillna(0).astype(int)
@@ -195,28 +218,32 @@ if start_btn and query:
         st.download_button("Download Excel", buffer, "results.xlsx")
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"❌ App Error: {e}")
 
 # ==========================================
 # BULK DOWNLOAD
 # ==========================================
 st.subheader("📥 Bulk Download from Excel")
 uploaded_file = st.file_uploader("Upload Excel with columns: Title, Link", type=["xlsx","xls"])
+
 if uploaded_file:
     df_upload = pd.read_excel(uploaded_file)
+
     if "Title" not in df_upload.columns or "Link" not in df_upload.columns:
         st.error("Excel must contain 'Title' and 'Link' columns.")
     else:
         zip_buffer = BytesIO()
         progress = st.progress(0)
+
         with zipfile.ZipFile(zip_buffer, "w") as zip_file:
             for i, row in df_upload.iterrows():
                 try:
                     r = requests.get(row["Link"], timeout=30)
-                    filename = f"{row['Title'][:50]}.pdf".replace("/","_")
+                    filename = f"{row['Title'][:50]}.pdf".replace("/", "_")
                     zip_file.writestr(filename, r.content)
                 except Exception as e:
                     st.warning(f"Failed: {e}")
-                progress.progress((i+1)/len(df_upload))
+
+                progress.progress((i + 1) / len(df_upload))
 
         st.download_button("Download ZIP", zip_buffer.getvalue(), "articles.zip")
