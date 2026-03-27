@@ -101,36 +101,55 @@ def scrape_pubmed(query, max_results):
 
 def scrape_scholar(query, year_low, year_high, max_results):
     session = requests.Session()
-    headers = {"User-Agent": "Mozilla/5.0"}
+    # Using a slightly more specific User-Agent helps a bit
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+    }
 
-    # warm-up
-    session.get("https://scholar.google.com", headers=headers)
-    time.sleep(random.uniform(30, 45))
-
+    # Initial warm-up
+    try:
+        session.get("https://scholar.google.com", headers=headers, timeout=10)
+    except:
+        pass
+        
     results = []
-    progress = st.progress(0)
+    progress_bar = st.progress(0)
+    status_text = st.empty()
 
-    for start in range(0, max_results, 10):
+    start = 0
+    while len(results) < max_results:
         encoded = urllib.parse.quote_plus(query)
         url = f"https://scholar.google.com/scholar?q={encoded}&as_ylo={year_low}&as_yhi={year_high}&start={start}"
 
         try:
             r = session.get(url, headers=headers, timeout=15)
-            html = r.text.lower()
+            html_check = r.text.lower()
 
             # 🚨 BLOCK DETECTION
-            if "captcha" in html or "unusual traffic" in html:
-                st.error("🚨 Google Scholar blocked the request (CAPTCHA detected).")
-                break
+            if "captcha" in html_check or "unusual traffic" in html_check:
+                st.warning("⚠️ Google Scholar CAPTCHA detected!")
+                st.markdown(f"**[Step 1: Click here to solve the CAPTCHA in your browser]({url})**")
+                st.info("Step 2: After solving it and seeing results in your browser, come back and click the button below.")
+                
+                # This button stops the code execution until clicked
+                if st.button(f"I've solved it! Resume scraping page {start//10 + 1}", key=f"retry_{start}"):
+                    st.rerun() # Refresh to try the same 'start' index again
+                else:
+                    st.stop() # Pause everything until the button is pressed
 
             soup = BeautifulSoup(r.text, "html.parser")
             listings = soup.select(".gs_r.gs_or.gs_scl")
 
             if not listings:
-                st.warning("⚠️ No results found or blocked.")
+                if "gs_rt" not in r.text: # Double check if it's an empty page or a hidden block
+                    st.error("Empty response. Google might be throttling you. Try solving CAPTCHA manually.")
+                    break
                 break
 
             for item in listings:
+                if len(results) >= max_results:
+                    break
+                    
                 title_tag = item.select_one(".gs_rt")
                 authors_tag = item.select_one(".gs_a")
                 snippet_tag = item.select_one(".gs_rs")
@@ -150,32 +169,34 @@ def scrape_scholar(query, year_low, year_high, max_results):
                 for a in footer_links:
                     if "Cited by" in a.text:
                         try:
-                            citations = int(a.text.replace("Cited by", "").strip())
+                            citations = int(re.sub(r"[^\d]", "", a.text))
                         except:
                             citations = 0
 
                 results.append({
-                    "Title": title_tag.text if title_tag else "",
+                    "Title": title_tag.text if title_tag else "N/A",
                     "Authors": authors,
                     "Year": year,
                     "Journal": journal,
-                    "Citations": citations or 0,
-                    "Link": title_tag.find("a")["href"] if title_tag and title_tag.find("a") else "",
+                    "Citations": citations,
+                    "Link": title_tag.find("a")["href"] if title_tag and title_tag.find("a") else "N/A",
                     "Abstract": snippet_tag.text if snippet_tag else ""
                 })
 
-            # ✅ REAL PROGRESS
-            progress.progress(min(len(results) / max_results, 1.0))
-            st.write(f"Scraped {len(results)} / {max_results} articles...")
+            # Update UI
+            current_progress = min(len(results) / max_results, 1.0)
+            progress_bar.progress(current_progress)
+            status_text.write(f"✅ Scraped {len(results)} / {max_results} articles...")
 
-            time.sleep(random.uniform(20, 40))
+            # Increment page and sleep
+            start += 10
+            time.sleep(random.uniform(15, 25)) # Slightly faster but still randomized
 
         except Exception as e:
-            st.error(f"❌ Error during scraping: {e}")
+            st.error(f"❌ Error: {e}")
             break
 
     return results
-
 # ==========================================
 # RUN SEARCH
 # ==========================================
