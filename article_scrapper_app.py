@@ -9,7 +9,6 @@ import pandas as pd
 import time
 import random
 import urllib.parse
-import re
 from io import BytesIO
 import zipfile
 
@@ -105,53 +104,6 @@ def scrape_pubmed(query, max_results):
         })
     return results
 
-def scrape_scholar(query, year_low, year_high, max_results):
-    session = requests.Session()
-    headers = {"User-Agent": "Mozilla/5.0"}
-    session.get("https://scholar.google.com", headers=headers)
-    time.sleep(random.uniform(20, 35))
-
-    results = []
-    progress = st.progress(0)
-    for start in range(0, max_results, 10):
-        encoded = urllib.parse.quote_plus(query)
-        url = f"https://scholar.google.com/scholar?q={encoded}&as_ylo={year_low}&as_yhi={year_high}&start={start}"
-
-        r = session.get(url, headers=headers)
-        soup = BeautifulSoup(r.text, "html.parser")
-        listings = soup.select(".gs_ri")  # more stable selector
-
-        for item in listings:
-            title_tag = item.select_one(".gs_rt")
-            authors_tag = item.select_one(".gs_a")
-            snippet_tag = item.select_one(".gs_rs")
-
-            title = title_tag.text if title_tag else ""
-            link = title_tag.find("a")["href"] if title_tag and title_tag.find("a") else ""
-            authors, year, journal = "N/A", "N/A", "N/A"
-
-            if authors_tag:
-                meta_text = authors_tag.text
-                parts = meta_text.split("-")
-                authors = parts[0].strip() if len(parts) > 0 else "N/A"
-                if len(parts) > 1:
-                    year_match = re.search(r"\b(19|20)\d{2}\b", parts[1])
-                    if year_match:
-                        year = year_match.group()
-                    journal = parts[1].strip()
-
-            results.append({
-                "Title": title,
-                "Authors": authors,
-                "Year": year,
-                "Journal": journal,
-                "Link": link,
-                "Abstract": snippet_tag.text if snippet_tag else ""
-            })
-        progress.progress(min((start+10)/max_results,1.0))
-        time.sleep(random.uniform(2, 4))
-    return results
-
 def scrape_scopus(query, max_results, api_key):
     headers = {"X-ELS-APIKey": api_key}
     url = f"https://api.elsevier.com/content/search/scopus?query={urllib.parse.quote(query)}&count={max_results}"
@@ -171,12 +123,50 @@ def scrape_scopus(query, max_results, api_key):
         st.warning("Error fetching Scopus data. Check API key.")
     return results
 
+def scrape_scholar(query, year_low, year_high, max_results):
+    session = requests.Session()
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116 Safari/537.36"}
+    session.get("https://scholar.google.com", headers=headers)
+    time.sleep(random.uniform(2,4))
+
+    results = []
+    progress = st.progress(0)
+    for start in range(0, max_results, 10):
+        url = f"https://scholar.google.com/scholar?hl=en&q={urllib.parse.quote_plus(query)}&as_ylo={year_low}&as_yhi={year_high}&start={start}"
+        r = session.get(url, headers=headers)
+        soup = BeautifulSoup(r.text, "html.parser")
+        articles = soup.select(".gs_ri")
+        for art in articles:
+            title_tag = art.select_one(".gs_rt")
+            link = title_tag.find("a")["href"] if title_tag and title_tag.find("a") else ""
+            title = title_tag.text if title_tag else ""
+            authors_tag = art.select_one(".gs_a")
+            snippet_tag = art.select_one(".gs_rs")
+            authors, year, journal = "N/A", "N/A", "N/A"
+            if authors_tag:
+                parts = authors_tag.text.split("-")
+                authors = parts[0].strip()
+                if len(parts)>1:
+                    year_match = re.search(r"\b(19|20)\d{2}\b", parts[1])
+                    if year_match: year = year_match.group()
+                    journal = parts[1].strip()
+            results.append({
+                "Title": title,
+                "Authors": authors,
+                "Year": year,
+                "Journal": journal,
+                "Link": link,
+                "Abstract": snippet_tag.text if snippet_tag else ""
+            })
+        progress.progress(min((start+10)/max_results, 1.0))
+        time.sleep(random.uniform(2,4))
+    return results
+
 # ==========================================
 # RUN SEARCH
 # ==========================================
 if start_btn and query:
     all_results = []
-
     if "Crossref" in databases:
         all_results += scrape_crossref(query, max_results)
     if "OpenAlex" in databases:
@@ -190,66 +180,42 @@ if start_btn and query:
     if "Scopus (API Key required)" in databases and scopus_key:
         all_results += scrape_scopus(query, max_results, scopus_key)
 
-    # Remove empty entries
     all_results = [r for r in all_results if r.get("Title")]
-
     df = pd.DataFrame(all_results)
 
-    # ==========================================
-    # DEDUPLICATION
-    # ==========================================
+    # Deduplication
     dedup = st.checkbox("Remove duplicate articles (by Title)")
     total_articles = len(df)
     duplicates_count = df.duplicated(subset=["Title"], keep=False).sum()
-
     if dedup:
         df = df.drop_duplicates(subset=["Title"], keep="first")
         st.info(f"Total extracted articles: {total_articles}")
         st.info(f"Total duplicates removed: {duplicates_count}")
         st.info(f"Total articles after deduplication: {len(df)}")
 
-    # ==========================================
-    # DISPLAY
-    # ==========================================
+    # Display results
     st.subheader(f"📊 Results ({len(df)})")
     st.dataframe(df, use_container_width=True)
 
-    # ==========================================
-    # DOWNLOAD SCRAPED DATA
-    # ==========================================
+    # Download buttons
     st.download_button("Download CSV", df.to_csv(index=False), "results.csv", mime="text/csv")
-
     excel_buffer = BytesIO()
     df.to_excel(excel_buffer, index=False, engine="xlsxwriter")
     excel_buffer.seek(0)
+    st.download_button("Download Excel", data=excel_buffer, file_name="results.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    st.download_button(
-        "Download Excel",
-        data=excel_buffer,
-        file_name="results.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-
-# ==========================================
-# BULK DOWNLOAD FROM EXCEL
-# ==========================================
+# Bulk download from Excel
 st.subheader("📥 Bulk Download from Excel")
-
-uploaded_file = st.file_uploader(
-    "Upload Excel with columns: Title, Link",
-    type=["xlsx", "xls"]
-)
-
+uploaded_file = st.file_uploader("Upload Excel with columns: Title, Link", type=["xlsx", "xls"])
 if uploaded_file:
     df_upload = pd.read_excel(uploaded_file)
-
     if "Title" not in df_upload.columns or "Link" not in df_upload.columns:
         st.error("Excel must contain 'Title' and 'Link' columns.")
     else:
         st.info(f"Preparing to download {len(df_upload)} files...")
         zip_buffer = BytesIO()
         progress = st.progress(0)
-
         with zipfile.ZipFile(zip_buffer, "w") as zip_file:
             for i, row in df_upload.iterrows():
                 title = str(row["Title"]).strip()
@@ -262,9 +228,4 @@ if uploaded_file:
                 except Exception as e:
                     st.warning(f"Failed to download '{title}': {e}")
                 progress.progress((i+1)/len(df_upload))
-
-        st.download_button(
-            "Download All Articles as ZIP",
-            zip_buffer.getvalue(),
-            file_name="articles.zip"
-        )
+        st.download_button("Download All Articles as ZIP", zip_buffer.getvalue(), file_name="articles.zip")
