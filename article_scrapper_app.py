@@ -147,7 +147,7 @@ def scrape_scholar(query, year_low, year_high, max_results):
                 "Abstract": snippet_tag.text if snippet_tag else ""
             })
         progress.progress(min((start+10)/max_results,1.0))
-        time.sleep(random.uniform(35,60))
+        time.sleep(random.uniform(40,80))
     return results
 
 # Placeholder for Scopus scraping (API required)
