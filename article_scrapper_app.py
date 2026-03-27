@@ -1,5 +1,5 @@
 # ==========================================
-# STREAMLIT MULTI-DATABASE LITERATURE SCRAPER
+# STREAMLIT MULTI-DATABASE LITERATURE SCRAPER (FULL UPDATED)
 # ==========================================
 
 import streamlit as st
@@ -12,9 +12,14 @@ import urllib.parse
 import re
 from io import BytesIO
 import zipfile
-import os
 
 st.set_page_config(page_title="Academic Article Scraper", layout="wide")
+
+# ==========================================
+# 🔧 SESSION CACHE
+# ==========================================
+if "cache_results" not in st.session_state:
+    st.session_state.cache_results = {}
 
 # ==========================================
 # UI HEADER
@@ -46,7 +51,7 @@ if "Scopus (API Key required)" in databases:
 start_btn = st.sidebar.button("🚀 Run Search")
 
 # ==========================================
-# SCRAPING FUNCTIONS
+# SCRAPERS
 # ==========================================
 def scrape_crossref(query, max_results):
     url = f"https://api.crossref.org/works?query={urllib.parse.quote(query)}&rows={max_results}"
@@ -55,10 +60,11 @@ def scrape_crossref(query, max_results):
     for item in r['message']['items']:
         results.append({
             "Title": item.get("title", [""])[0],
-            "Authors": ", ".join([a.get("family","") for a in item.get("author",[])]),
+            "Authors": ", ".join([a.get("family",""
+) for a in item.get("author",[])]),
             "Year": item.get("issued", {}).get("date-parts", [[None]])[0][0],
             "Journal": item.get("container-title", [""])[0],
-            "Citations": item.get("is-referenced-by-count", 0),
+            "Citations": item.get("is-referenced-by-count", 0) or 0,
             "Link": item.get("URL", "")
         })
     return results
@@ -73,7 +79,7 @@ def scrape_openalex(query, max_results):
             "Authors": ", ".join([a['author']['display_name'] for a in item.get('authorships',[])]),
             "Year": item.get("publication_year"),
             "Journal": item.get("host_venue", {}).get("display_name"),
-            "Citations": item.get("cited_by_count"),
+            "Citations": item.get("cited_by_count", 0) or 0,
             "Link": item.get("id")
         })
     return results
@@ -88,7 +94,7 @@ def scrape_semantic(query, max_results):
             "Authors": ", ".join([a.get("name") for a in item.get("authors",[])]),
             "Year": item.get("year"),
             "Journal": "",
-            "Citations": item.get("citationCount"),
+            "Citations": item.get("citationCount", 0) or 0,
             "Link": item.get("url")
         })
     return results
@@ -96,36 +102,32 @@ def scrape_semantic(query, max_results):
 def scrape_pubmed(query, max_results):
     url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmax={max_results}&term={urllib.parse.quote(query)}&retmode=json"
     ids = requests.get(url).json()["esearchresult"]["idlist"]
-    results = []
-    for pid in ids:
-        results.append({"Title": f"PubMed ID {pid}", "Authors": "", "Year": "", "Journal": "", "Citations": 0, "Link": f"https://pubmed.ncbi.nlm.nih.gov/{pid}/"})
-    return results
+    return [{"Title": f"PubMed ID {pid}", "Authors": "", "Year": "", "Journal": "", "Citations": 0, "Link": f"https://pubmed.ncbi.nlm.nih.gov/{pid}/"} for pid in ids]
 
 def scrape_scholar(query, year_low, year_high, max_results):
     session = requests.Session()
     headers = {"User-Agent": "Mozilla/5.0"}
     session.get("https://scholar.google.com", headers=headers)
-    time.sleep(random.uniform(10, 20))
+    time.sleep(random.uniform(20, 35))
 
     results = []
     progress = st.progress(0)
     for start in range(0, max_results, 10):
         encoded = urllib.parse.quote_plus(query)
         url = f"https://scholar.google.com/scholar?q={encoded}&as_ylo={year_low}&as_yhi={year_high}&start={start}"
-
         r = session.get(url, headers=headers)
         soup = BeautifulSoup(r.text, "html.parser")
         listings = soup.select(".gs_r.gs_or.gs_scl")
+
         for item in listings:
             title_tag = item.select_one(".gs_rt")
             authors_tag = item.select_one(".gs_a")
             snippet_tag = item.select_one(".gs_rs")
             footer_links = item.select(".gs_fl a")
-            
+
             authors, year, journal, citations = "N/A", "N/A", "N/A", 0
             if authors_tag:
-                meta_text = authors_tag.text
-                parts = meta_text.split("-")
+                parts = authors_tag.text.split("-")
                 authors = parts[0].strip() if len(parts)>0 else "N/A"
                 if len(parts)>1:
                     year_match = re.search(r"\b(19|20)\d{2}\b", parts[1])
@@ -133,9 +135,8 @@ def scrape_scholar(query, year_low, year_high, max_results):
                     journal = parts[1].strip()
             for a in footer_links:
                 if "Cited by" in a.text:
-                    try:
-                        citations = int(a.text.replace("Cited by","").strip())
-                    except: citations=0
+                    try: citations = int(a.text.replace("Cited by",""))
+                    except: citations = 0
 
             results.append({
                 "Title": title_tag.text if title_tag else "",
@@ -146,121 +147,76 @@ def scrape_scholar(query, year_low, year_high, max_results):
                 "Link": title_tag.find("a")["href"] if title_tag and title_tag.find("a") else "",
                 "Abstract": snippet_tag.text if snippet_tag else ""
             })
-        progress.progress(min((start+10)/max_results,1.0))
-        time.sleep(random.uniform(35,60))
-    return results
 
-# Placeholder for Scopus scraping (API required)
-def scrape_scopus(query, max_results, api_key):
-    headers = {"X-ELS-APIKey": api_key}
-    url = f"https://api.elsevier.com/content/search/scopus?query={urllib.parse.quote(query)}&count={max_results}"
-    r = requests.get(url, headers=headers)
-    results = []
-    try:
-        data = r.json().get("search-results", {}).get("entry", [])
-        for item in data:
-            results.append({
-                "Title": item.get("dc:title"),
-                "Authors": item.get("dc:creator",""),
-                "Year": item.get("prism:coverDate","")[:4],
-                "Journal": item.get("prism:publicationName",""),
-                "Citations": int(item.get("citedby-count",0)),
-                "Link": item.get("prism:url","")
-            })
-    except:
-        st.warning("Error fetching Scopus data. Check API key.")
+        st.write(f"Scraped {len(results)} / {max_results} articles...")
+        progress.progress(min(len(results)/max_results,1.0))
+        time.sleep(random.uniform(35,60))
+
     return results
 
 # ==========================================
 # RUN SEARCH
 # ==========================================
 if start_btn and query:
-    all_results = []
+    try:
+        key = f"{query}_{year_low}_{year_high}_{max_results}_{'_'.join(databases)}"
+        all_results = st.session_state.cache_results.get(key, [])
 
-    if "Crossref" in databases:
-        all_results += scrape_crossref(query, max_results)
-    if "OpenAlex" in databases:
-        all_results += scrape_openalex(query, max_results)
-    if "Semantic Scholar" in databases:
-        all_results += scrape_semantic(query, max_results)
-    if "PubMed" in databases:
-        all_results += scrape_pubmed(query, max_results)
-    if "Google Scholar" in databases:
-        all_results += scrape_scholar(query, year_low, year_high, max_results)
-    if "Scopus (API Key required)" in databases and scopus_key:
-        all_results += scrape_scopus(query, max_results, scopus_key)
+        if "Crossref" in databases:
+            all_results += scrape_crossref(query, max_results)
+        if "OpenAlex" in databases:
+            all_results += scrape_openalex(query, max_results)
+        if "Semantic Scholar" in databases:
+            all_results += scrape_semantic(query, max_results)
+        if "PubMed" in databases:
+            all_results += scrape_pubmed(query, max_results)
+        if "Google Scholar" in databases:
+            all_results += scrape_scholar(query, year_low, year_high, max_results)
 
-    df = pd.DataFrame(all_results)
+        st.session_state.cache_results[key] = all_results
 
-    # ==========================================
-    # DEDUPLICATION
-    # ==========================================
-    dedup = st.checkbox("Remove duplicate articles (by Title)")
-    total_articles = len(df)
-    duplicates_count = df.duplicated(subset=["Title"], keep=False).sum()
-    if dedup:
-        df = df.drop_duplicates(subset=["Title"], keep="first")
-        st.info(f"Total extracted articles: {total_articles}")
-        st.info(f"Total duplicates removed: {duplicates_count}")
-        st.info(f"Total articles after deduplication: {len(df)}")
+        df = pd.DataFrame(all_results)
 
-    # ==========================================
-    # FILTERS
-    # ==========================================
-    min_cite = st.slider("Minimum Citations", 0, 500, 0)
-    df = df[df["Citations"].fillna(0) >= min_cite]
+        if "Citations" not in df.columns:
+            df["Citations"] = 0
+        df["Citations"] = pd.to_numeric(df["Citations"], errors="coerce").fillna(0).astype(int)
 
-    # ==========================================
-    # DISPLAY
-    # ==========================================
-    st.subheader(f"📊 Results ({len(df)})")
-    st.dataframe(df, use_container_width=True)
+        min_cite = st.slider("Minimum Citations", 0, 500, 0)
+        df = df[df["Citations"] >= min_cite]
 
-    # ==========================================
-    # DOWNLOAD SCRAPED DATA
-    # ==========================================
-    st.download_button("Download CSV", df.to_csv(index=False), "results.csv", mime="text/csv")
+        st.subheader(f"📊 Results ({len(df)})")
+        st.dataframe(df, use_container_width=True)
 
-    excel_buffer = BytesIO()
-    df.to_excel(excel_buffer, index=False, engine="xlsxwriter")
-    excel_buffer.seek(0)
-    st.download_button(
-        "Download Excel",
-        data=excel_buffer,
-        file_name="results.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        st.download_button("Download CSV", df.to_csv(index=False), "results.csv", mime="text/csv")
+
+        buffer = BytesIO()
+        df.to_excel(buffer, index=False, engine="xlsxwriter")
+        buffer.seek(0)
+        st.download_button("Download Excel", buffer, "results.xlsx")
+
+    except Exception as e:
+        st.error(f"Error: {e}")
 
 # ==========================================
-# BULK DOWNLOAD FROM EXCEL
+# BULK DOWNLOAD
 # ==========================================
 st.subheader("📥 Bulk Download from Excel")
-uploaded_file = st.file_uploader(
-    "Upload Excel with columns: Title, Link",
-    type=["xlsx", "xls"]
-)
+uploaded_file = st.file_uploader("Upload Excel with columns: Title, Link", type=["xlsx","xls"])
 if uploaded_file:
     df_upload = pd.read_excel(uploaded_file)
     if "Title" not in df_upload.columns or "Link" not in df_upload.columns:
         st.error("Excel must contain 'Title' and 'Link' columns.")
     else:
-        st.info(f"Preparing to download {len(df_upload)} files...")
         zip_buffer = BytesIO()
         progress = st.progress(0)
         with zipfile.ZipFile(zip_buffer, "w") as zip_file:
             for i, row in df_upload.iterrows():
-                title = str(row["Title"]).strip()
-                link = row["Link"]
                 try:
-                    r = requests.get(link, timeout=30)
-                    ext = "pdf" if "application/pdf" in r.headers.get("Content-Type","") else "bin"
-                    filename = f"{title[:50]}.{ext}".replace("/", "_").replace("\\", "_")
+                    r = requests.get(row["Link"], timeout=30)
+                    filename = f"{row['Title'][:50]}.pdf".replace("/","_")
                     zip_file.writestr(filename, r.content)
                 except Exception as e:
-                    st.warning(f"Failed to download '{title}': {e}")
+                    st.warning(f"Failed: {e}")
                 progress.progress((i+1)/len(df_upload))
-        st.download_button(
-            "Download All Articles as ZIP",
-            zip_buffer.getvalue(),
-            file_name="articles.zip"
-        )
+
+        st.download_button("Download ZIP", zip_buffer.getvalue(), "articles.zip")
