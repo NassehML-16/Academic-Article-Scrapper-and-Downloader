@@ -12,7 +12,6 @@ import urllib.parse
 import re
 from io import BytesIO
 import zipfile
-import os
 
 st.set_page_config(page_title="Academic Article Scraper", layout="wide")
 
@@ -48,128 +47,221 @@ start_btn = st.sidebar.button("🚀 Run Search")
 # ==========================================
 # SCRAPING FUNCTIONS
 # ==========================================
+
 def scrape_crossref(query, max_results):
-    url = f"https://api.crossref.org/works?query={urllib.parse.quote(query)}&rows={max_results}"
-    r = requests.get(url).json()
-    results = []
-    for item in r['message']['items']:
-        results.append({
-            "Title": item.get("title", [""])[0],
-            "Authors": ", ".join([a.get("family","") for a in item.get("author",[])]),
-            "Year": item.get("issued", {}).get("date-parts", [[None]])[0][0],
-            "Journal": item.get("container-title", [""])[0],
-            "Citations": item.get("is-referenced-by-count", 0),
-            "Link": item.get("URL", "")
-        })
-    return results
-
-def scrape_openalex(query, max_results):
-    url = f"https://api.openalex.org/works?search={urllib.parse.quote(query)}&per-page={max_results}"
-    r = requests.get(url).json()
-    results = []
-    for item in r['results']:
-        results.append({
-            "Title": item.get("title"),
-            "Authors": ", ".join([a['author']['display_name'] for a in item.get('authorships',[])]),
-            "Year": item.get("publication_year"),
-            "Journal": item.get("host_venue", {}).get("display_name"),
-            "Citations": item.get("cited_by_count"),
-            "Link": item.get("id")
-        })
-    return results
-
-def scrape_semantic(query, max_results):
-    url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={urllib.parse.quote(query)}&limit={max_results}&fields=title,authors,year,citationCount,url"
-    r = requests.get(url).json()
-    results = []
-    for item in r.get("data", []):
-        results.append({
-            "Title": item.get("title"),
-            "Authors": ", ".join([a.get("name") for a in item.get("authors",[])]),
-            "Year": item.get("year"),
-            "Journal": "",
-            "Citations": item.get("citationCount"),
-            "Link": item.get("url")
-        })
-    return results
-
-def scrape_pubmed(query, max_results):
-    url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmax={max_results}&term={urllib.parse.quote(query)}&retmode=json"
-    ids = requests.get(url).json()["esearchresult"]["idlist"]
-    results = []
-    for pid in ids:
-        results.append({"Title": f"PubMed ID {pid}", "Authors": "", "Year": "", "Journal": "", "Citations": 0, "Link": f"https://pubmed.ncbi.nlm.nih.gov/{pid}/"})
-    return results
-
-def scrape_scholar(query, year_low, year_high, max_results):
-    session = requests.Session()
-    headers = {"User-Agent": "Mozilla/5.0"}
-    session.get("https://scholar.google.com", headers=headers)
-    time.sleep(random.uniform(10, 20))
-
-    results = []
-    progress = st.progress(0)
-    for start in range(0, max_results, 10):
-        encoded = urllib.parse.quote_plus(query)
-        url = f"https://scholar.google.com/scholar?q={encoded}&as_ylo={year_low}&as_yhi={year_high}&start={start}"
-
-        r = session.get(url, headers=headers)
-        soup = BeautifulSoup(r.text, "html.parser")
-        listings = soup.select(".gs_r.gs_or.gs_scl")
-        for item in listings:
-            title_tag = item.select_one(".gs_rt")
-            authors_tag = item.select_one(".gs_a")
-            snippet_tag = item.select_one(".gs_rs")
-            footer_links = item.select(".gs_fl a")
-            
-            authors, year, journal, citations = "N/A", "N/A", "N/A", 0
-            if authors_tag:
-                meta_text = authors_tag.text
-                parts = meta_text.split("-")
-                authors = parts[0].strip() if len(parts)>0 else "N/A"
-                if len(parts)>1:
-                    year_match = re.search(r"\b(19|20)\d{2}\b", parts[1])
-                    if year_match: year = year_match.group()
-                    journal = parts[1].strip()
-            for a in footer_links:
-                if "Cited by" in a.text:
-                    try:
-                        citations = int(a.text.replace("Cited by","").strip())
-                    except: citations=0
-
-            results.append({
-                "Title": title_tag.text if title_tag else "",
-                "Authors": authors,
-                "Year": year,
-                "Journal": journal,
-                "Citations": citations,
-                "Link": title_tag.find("a")["href"] if title_tag and title_tag.find("a") else "",
-                "Abstract": snippet_tag.text if snippet_tag else ""
-            })
-        progress.progress(min((start+10)/max_results,1.0))
-        time.sleep(random.uniform(35,60))
-    return results
-
-# Placeholder for Scopus scraping (API required)
-def scrape_scopus(query, max_results, api_key):
-    headers = {"X-ELS-APIKey": api_key}
-    url = f"https://api.elsevier.com/content/search/scopus?query={urllib.parse.quote(query)}&count={max_results}"
-    r = requests.get(url, headers=headers)
     results = []
     try:
+        url = f"https://api.crossref.org/works?query={urllib.parse.quote(query)}&rows={max_results}"
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        items = data.get("message", {}).get("items", [])
+        for item in items:
+            results.append({
+                "Title": item.get("title", [""])[0],
+                "Authors": ", ".join([a.get("family", "") for a in item.get("author", [])]),
+                "Year": item.get("issued", {}).get("date-parts", [[None]])[0][0],
+                "Journal": item.get("container-title", [""])[0],
+                "Citations": item.get("is-referenced-by-count", 0),
+                "Link": item.get("URL", "")
+            })
+        st.success(f"✅ Crossref: {len(results)} results fetched.")
+    except Exception as e:
+        st.error(f"❌ Crossref failed: {e}")
+    return results
+
+
+def scrape_openalex(query, max_results):
+    results = []
+    try:
+        url = f"https://api.openalex.org/works?search={urllib.parse.quote(query)}&per-page={min(max_results, 200)}"
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        items = data.get("results", [])
+        for item in items:
+            # Handle both old (host_venue) and new (primary_location) API shapes
+            host = item.get("primary_location") or item.get("host_venue") or {}
+            source = host.get("source") or host
+            journal_name = source.get("display_name", "") if isinstance(source, dict) else ""
+            results.append({
+                "Title": item.get("title", ""),
+                "Authors": ", ".join(
+                    [a.get("author", {}).get("display_name", "") for a in item.get("authorships", [])]
+                ),
+                "Year": item.get("publication_year", ""),
+                "Journal": journal_name,
+                "Citations": item.get("cited_by_count", 0),
+                "Link": item.get("doi") or item.get("id", "")
+            })
+        st.success(f"✅ OpenAlex: {len(results)} results fetched.")
+    except Exception as e:
+        st.error(f"❌ OpenAlex failed: {e}")
+    return results
+
+
+def scrape_semantic(query, max_results):
+    results = []
+    try:
+        url = (
+            f"https://api.semanticscholar.org/graph/v1/paper/search"
+            f"?query={urllib.parse.quote(query)}&limit={min(max_results, 100)}"
+            f"&fields=title,authors,year,citationCount,url,externalIds"
+        )
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        for item in data.get("data", []):
+            doi = item.get("externalIds", {}).get("DOI", "")
+            link = f"https://doi.org/{doi}" if doi else item.get("url", "")
+            results.append({
+                "Title": item.get("title", ""),
+                "Authors": ", ".join([a.get("name", "") for a in item.get("authors", [])]),
+                "Year": item.get("year", ""),
+                "Journal": "",
+                "Citations": item.get("citationCount", 0),
+                "Link": link
+            })
+        st.success(f"✅ Semantic Scholar: {len(results)} results fetched.")
+    except Exception as e:
+        st.error(f"❌ Semantic Scholar failed: {e}")
+    return results
+
+
+def scrape_pubmed(query, max_results):
+    results = []
+    try:
+        search_url = (
+            f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+            f"?db=pubmed&retmax={max_results}&term={urllib.parse.quote(query)}&retmode=json"
+        )
+        r = requests.get(search_url, timeout=15)
+        r.raise_for_status()
+        ids = r.json().get("esearchresult", {}).get("idlist", [])
+
+        if not ids:
+            st.warning("⚠️ PubMed: No article IDs returned for this query.")
+            return results
+
+        # Fetch summaries for all IDs in one call
+        ids_str = ",".join(ids)
+        summary_url = (
+            f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+            f"?db=pubmed&id={ids_str}&retmode=json"
+        )
+        rs = requests.get(summary_url, timeout=15)
+        rs.raise_for_status()
+        summary_data = rs.json().get("result", {})
+
+        for pid in ids:
+            article = summary_data.get(pid, {})
+            authors = ", ".join([a.get("name", "") for a in article.get("authors", [])])
+            pub_date = article.get("pubdate", "")
+            year_match = re.search(r"\b(19|20)\d{2}\b", pub_date)
+            year = year_match.group() if year_match else ""
+            results.append({
+                "Title": article.get("title", f"PubMed ID {pid}"),
+                "Authors": authors,
+                "Year": year,
+                "Journal": article.get("source", ""),
+                "Citations": 0,
+                "Link": f"https://pubmed.ncbi.nlm.nih.gov/{pid}/"
+            })
+        st.success(f"✅ PubMed: {len(results)} results fetched.")
+    except Exception as e:
+        st.error(f"❌ PubMed failed: {e}")
+    return results
+
+
+def scrape_scholar(query, year_low, year_high, max_results):
+    results = []
+    try:
+        session = requests.Session()
+        headers = {"User-Agent": "Mozilla/5.0"}
+        session.get("https://scholar.google.com", headers=headers, timeout=15)
+        time.sleep(random.uniform(10, 20))
+
+        progress = st.progress(0)
+        for start in range(0, max_results, 10):
+            encoded = urllib.parse.quote_plus(query)
+            url = (
+                f"https://scholar.google.com/scholar"
+                f"?q={encoded}&as_ylo={year_low}&as_yhi={year_high}&start={start}"
+            )
+            r = session.get(url, headers=headers, timeout=15)
+            soup = BeautifulSoup(r.text, "html.parser")
+            listings = soup.select(".gs_r.gs_or.gs_scl")
+
+            if not listings:
+                st.warning("⚠️ Google Scholar may be blocking requests (CAPTCHA). Try fewer results or try later.")
+                break
+
+            for item in listings:
+                title_tag = item.select_one(".gs_rt")
+                authors_tag = item.select_one(".gs_a")
+                snippet_tag = item.select_one(".gs_rs")
+                footer_links = item.select(".gs_fl a")
+
+                authors, year, journal, citations = "N/A", "N/A", "N/A", 0
+                if authors_tag:
+                    parts = authors_tag.text.split("-")
+                    authors = parts[0].strip() if parts else "N/A"
+                    if len(parts) > 1:
+                        year_match = re.search(r"\b(19|20)\d{2}\b", parts[1])
+                        if year_match:
+                            year = year_match.group()
+                        journal = parts[1].strip()
+                for a in footer_links:
+                    if "Cited by" in a.text:
+                        try:
+                            citations = int(a.text.replace("Cited by", "").strip())
+                        except:
+                            citations = 0
+
+                results.append({
+                    "Title": title_tag.text if title_tag else "",
+                    "Authors": authors,
+                    "Year": year,
+                    "Journal": journal,
+                    "Citations": citations,
+                    "Link": title_tag.find("a")["href"] if title_tag and title_tag.find("a") else "",
+                    "Abstract": snippet_tag.text if snippet_tag else ""
+                })
+
+            progress.progress(min((start + 10) / max_results, 1.0))
+            time.sleep(random.uniform(35, 60))
+
+        st.success(f"✅ Google Scholar: {len(results)} results fetched.")
+    except Exception as e:
+        st.error(f"❌ Google Scholar failed: {e}")
+    return results
+
+
+def scrape_scopus(query, max_results, api_key):
+    results = []
+    try:
+        headers = {"X-ELS-APIKey": api_key, "Accept": "application/json"}
+        url = (
+            f"https://api.elsevier.com/content/search/scopus"
+            f"?query={urllib.parse.quote(query)}&count={max_results}"
+        )
+        r = requests.get(url, headers=headers, timeout=15)
+        r.raise_for_status()
         data = r.json().get("search-results", {}).get("entry", [])
         for item in data:
             results.append({
-                "Title": item.get("dc:title"),
-                "Authors": item.get("dc:creator",""),
-                "Year": item.get("prism:coverDate","")[:4],
-                "Journal": item.get("prism:publicationName",""),
-                "Citations": int(item.get("citedby-count",0)),
-                "Link": item.get("prism:url","")
+                "Title": item.get("dc:title", ""),
+                "Authors": item.get("dc:creator", ""),
+                "Year": item.get("prism:coverDate", "")[:4],
+                "Journal": item.get("prism:publicationName", ""),
+                "Citations": int(item.get("citedby-count", 0)),
+                "Link": item.get("prism:url", "")
             })
-    except:
-        st.warning("Error fetching Scopus data. Check API key.")
+        st.success(f"✅ Scopus: {len(results)} results fetched.")
+    except Exception as e:
+        st.error(f"❌ Scopus failed: {e}")
     return results
+
 
 # ==========================================
 # RUN SEARCH
@@ -177,18 +269,19 @@ def scrape_scopus(query, max_results, api_key):
 if start_btn and query:
     all_results = []
 
-    if "Crossref" in databases:
-        all_results += scrape_crossref(query, max_results)
-    if "OpenAlex" in databases:
-        all_results += scrape_openalex(query, max_results)
-    if "Semantic Scholar" in databases:
-        all_results += scrape_semantic(query, max_results)
-    if "PubMed" in databases:
-        all_results += scrape_pubmed(query, max_results)
-    if "Google Scholar" in databases:
-        all_results += scrape_scholar(query, year_low, year_high, max_results)
-    if "Scopus (API Key required)" in databases and scopus_key:
-        all_results += scrape_scopus(query, max_results, scopus_key)
+    with st.spinner("Fetching results from selected databases..."):
+        if "Crossref" in databases:
+            all_results += scrape_crossref(query, max_results)
+        if "OpenAlex" in databases:
+            all_results += scrape_openalex(query, max_results)
+        if "Semantic Scholar" in databases:
+            all_results += scrape_semantic(query, max_results)
+        if "PubMed" in databases:
+            all_results += scrape_pubmed(query, max_results)
+        if "Google Scholar" in databases:
+            all_results += scrape_scholar(query, year_low, year_high, max_results)
+        if "Scopus (API Key required)" in databases and scopus_key:
+            all_results += scrape_scopus(query, max_results, scopus_key)
 
     # ==========================================
     # BUILD DATAFRAME — ensure all expected columns exist
@@ -196,12 +289,12 @@ if start_btn and query:
     EXPECTED_COLUMNS = ["Title", "Authors", "Year", "Journal", "Citations", "Link"]
 
     if not all_results:
-        st.warning("No results returned. Try a different query or database selection.")
+        st.warning("No results returned. Check the ❌ error messages above for details on which database failed and why.")
         st.stop()
 
     df = pd.DataFrame(all_results)
 
-    # Add any missing columns with sensible defaults so downstream code never KeyErrors
+    # Add any missing columns with sensible defaults
     for col in EXPECTED_COLUMNS:
         if col not in df.columns:
             df[col] = 0 if col == "Citations" else ""
@@ -248,6 +341,9 @@ if start_btn and query:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
+elif start_btn and not query:
+    st.warning("Please enter a search query before running.")
+
 # ==========================================
 # BULK DOWNLOAD FROM EXCEL
 # ==========================================
@@ -270,12 +366,12 @@ if uploaded_file:
                 link = row["Link"]
                 try:
                     r = requests.get(link, timeout=30)
-                    ext = "pdf" if "application/pdf" in r.headers.get("Content-Type","") else "bin"
+                    ext = "pdf" if "application/pdf" in r.headers.get("Content-Type", "") else "bin"
                     filename = f"{title[:50]}.{ext}".replace("/", "_").replace("\\", "_")
                     zip_file.writestr(filename, r.content)
                 except Exception as e:
                     st.warning(f"Failed to download '{title}': {e}")
-                progress.progress((i+1)/len(df_upload))
+                progress.progress((i + 1) / len(df_upload))
         st.download_button(
             "Download All Articles as ZIP",
             zip_buffer.getvalue(),
