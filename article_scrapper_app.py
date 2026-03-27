@@ -120,8 +120,17 @@ def scrape_pubmed(query, max_results):
 
 def scrape_scholar(query, year_low, year_high, max_results):
     session = requests.Session()
+    
+    # 1. ENHANCED HEADERS: To match a real Chrome browser more closely
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer": "https://scholar.google.com/",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
     }
     
     # Resume from session state if available
@@ -139,13 +148,22 @@ def scrape_scholar(query, year_low, year_high, max_results):
             r = session.get(url, headers=headers, timeout=15)
             html_check = r.text.lower()
 
-            # 🚨 CAPTCHA DETECTION
-            if "captcha" in html_check or "unusual traffic" in html_check:
-                st.warning(f"⚠️ Google Scholar CAPTCHA detected at result {len(results)}!")
-                st.markdown(f"### [Step 1: Click here to solve CAPTCHA]({url})")
-                st.info("Step 2: Solve it in the browser, verify results appear, then click the button below.")
+            # 🚨 IMPROVED BLOCK DETECTION
+            # Google sometimes returns a 403 or 429 without "captcha" in the text
+            if "captcha" in html_check or "unusual traffic" in html_check or r.status_code in [403, 429]:
+                st.warning(f"⚠️ Google is throttling requests at result {len(results)}.")
                 
-                if st.button(f"✅ Resolved! Resume from page {start_index//10 + 1}"):
+                # 2. THE FIX: Instructions to force a cookie refresh
+                st.markdown(f"### [Step 1: Click here to verify you are human]({url})")
+                st.info("""
+                **If you don't see a CAPTCHA:** Just refresh the Google page twice, 
+                perform a manual search for anything, then come back here.
+                """)
+                
+                # We use a unique key for the button to avoid Streamlit Duplicate ID errors
+                if st.button(f"✅ I've verified/refreshed! Resume", key=f"scholar_res_{start_index}"):
+                    # Give it one more long sleep to let the IP 'cool down'
+                    time.sleep(5)
                     st.rerun()
                 else:
                     st.stop() 
@@ -153,7 +171,11 @@ def scrape_scholar(query, year_low, year_high, max_results):
             soup = BeautifulSoup(r.text, "html.parser")
             listings = soup.select(".gs_r.gs_or.gs_scl")
 
+            # 3. HANDLING EMPTY LISTS
             if not listings:
+                if "gs_res_ccl_mid" not in r.text: # If the main results container is missing
+                    st.error("Google Scholar blocked the page structure. Try again in a few minutes.")
+                    break
                 break
 
             for item in listings:
@@ -184,14 +206,15 @@ def scrape_scholar(query, year_low, year_high, max_results):
                     "Source": "Google Scholar"
                 })
             
-            # Save progress so it survives the rerun
             st.session_state.scholar_temp_results = results
             start_index += 10
             
             progress_bar.progress(min(len(results) / max_results, 1.0))
             status_text.write(f"✅ Scholar: Collected {len(results)} articles...")
             
-            time.sleep(random.uniform(15, 25))
+            # 4. RANDOMIZED HUMAN DELAY
+            # Short delays are the #1 reason for blocks. 
+            time.sleep(random.uniform(20, 35))
 
         except Exception as e:
             st.error(f"❌ Scholar Error: {e}")
