@@ -12,9 +12,8 @@ import urllib.parse
 import re
 from io import BytesIO
 import zipfile
-import os
 
-st.set_page_config(page_title="Academic Article Scraper", layout="wide")
+st.set_page_config(page_title="Academic Article Scraper & Downloader", layout="wide")
 
 # ==========================================
 # UI HEADER
@@ -52,12 +51,12 @@ def scrape_crossref(query, max_results):
     url = f"https://api.crossref.org/works?query={urllib.parse.quote(query)}&rows={max_results}"
     r = requests.get(url).json()
     results = []
-    for item in r['message']['items']:
+    for item in r.get('message', {}).get('items', []):
         results.append({
-            "Title": item.get("title", [""])[0],
+            "Title": (item.get("title") or [""])[0],
             "Authors": ", ".join([a.get("family","") for a in item.get("author",[])]),
             "Year": item.get("issued", {}).get("date-parts", [[None]])[0][0],
-            "Journal": item.get("container-title", [""])[0],
+            "Journal": (item.get("container-title") or [""])[0],
             "Link": item.get("URL", "")
         })
     return results
@@ -66,13 +65,14 @@ def scrape_openalex(query, max_results):
     url = f"https://api.openalex.org/works?search={urllib.parse.quote(query)}&per-page={max_results}"
     r = requests.get(url).json()
     results = []
-    for item in r['results']:
+    for item in r.get('results', []):
+        authors_list = [a.get('author', {}).get('display_name', '') for a in item.get('authorships', [])]
         results.append({
-            "Title": item.get("title"),
-            "Authors": ", ".join([a['author']['display_name'] for a in item.get('authorships',[])]),
+            "Title": item.get("title") or "",
+            "Authors": ", ".join(authors_list),
             "Year": item.get("publication_year"),
-            "Journal": item.get("host_venue", {}).get("display_name"),
-            "Link": item.get("id")
+            "Journal": item.get("host_venue", {}).get("display_name", ""),
+            "Link": item.get("id", "")
         })
     return results
 
@@ -81,18 +81,19 @@ def scrape_semantic(query, max_results):
     r = requests.get(url).json()
     results = []
     for item in r.get("data", []):
+        authors_list = [a.get("name", "") for a in item.get("authors", [])]
         results.append({
-            "Title": item.get("title"),
-            "Authors": ", ".join([a.get("name") for a in item.get("authors",[])]),
-            "Year": item.get("year"),
+            "Title": item.get("title", ""),
+            "Authors": ", ".join(authors_list),
+            "Year": item.get("year", ""),
             "Journal": "",
-            "Link": item.get("url")
+            "Link": item.get("url", "")
         })
     return results
 
 def scrape_pubmed(query, max_results):
     url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmax={max_results}&term={urllib.parse.quote(query)}&retmode=json"
-    ids = requests.get(url).json()["esearchresult"]["idlist"]
+    ids = requests.get(url).json().get("esearchresult", {}).get("idlist", [])
     results = []
     for pid in ids:
         results.append({
@@ -108,7 +109,7 @@ def scrape_scholar(query, year_low, year_high, max_results):
     session = requests.Session()
     headers = {"User-Agent": "Mozilla/5.0"}
     session.get("https://scholar.google.com", headers=headers)
-    time.sleep(random.uniform(30, 45))
+    time.sleep(random.uniform(20, 35))
 
     results = []
     progress = st.progress(0)
@@ -118,36 +119,37 @@ def scrape_scholar(query, year_low, year_high, max_results):
 
         r = session.get(url, headers=headers)
         soup = BeautifulSoup(r.text, "html.parser")
-        listings = soup.select(".gs_r.gs_or.gs_scl")
+        listings = soup.select(".gs_ri")  # more stable selector
 
         for item in listings:
             title_tag = item.select_one(".gs_rt")
             authors_tag = item.select_one(".gs_a")
             snippet_tag = item.select_one(".gs_rs")
 
+            title = title_tag.text if title_tag else ""
+            link = title_tag.find("a")["href"] if title_tag and title_tag.find("a") else ""
             authors, year, journal = "N/A", "N/A", "N/A"
 
             if authors_tag:
                 meta_text = authors_tag.text
                 parts = meta_text.split("-")
-                authors = parts[0].strip() if len(parts)>0 else "N/A"
-                if len(parts)>1:
+                authors = parts[0].strip() if len(parts) > 0 else "N/A"
+                if len(parts) > 1:
                     year_match = re.search(r"\b(19|20)\d{2}\b", parts[1])
-                    if year_match: year = year_match.group()
+                    if year_match:
+                        year = year_match.group()
                     journal = parts[1].strip()
 
             results.append({
-                "Title": title_tag.text if title_tag else "",
+                "Title": title,
                 "Authors": authors,
                 "Year": year,
                 "Journal": journal,
-                "Link": title_tag.find("a")["href"] if title_tag and title_tag.find("a") else "",
+                "Link": link,
                 "Abstract": snippet_tag.text if snippet_tag else ""
             })
-
         progress.progress(min((start+10)/max_results,1.0))
-        time.sleep(random.uniform(35,60))
-
+        time.sleep(random.uniform(2, 4))
     return results
 
 def scrape_scopus(query, max_results, api_key):
@@ -159,8 +161,8 @@ def scrape_scopus(query, max_results, api_key):
         data = r.json().get("search-results", {}).get("entry", [])
         for item in data:
             results.append({
-                "Title": item.get("dc:title"),
-                "Authors": item.get("dc:creator",""),
+                "Title": item.get("dc:title", ""),
+                "Authors": item.get("dc:creator", ""),
                 "Year": item.get("prism:coverDate","")[:4],
                 "Journal": item.get("prism:publicationName",""),
                 "Link": item.get("prism:url","")
@@ -187,6 +189,9 @@ if start_btn and query:
         all_results += scrape_scholar(query, year_low, year_high, max_results)
     if "Scopus (API Key required)" in databases and scopus_key:
         all_results += scrape_scopus(query, max_results, scopus_key)
+
+    # Remove empty entries
+    all_results = [r for r in all_results if r.get("Title")]
 
     df = pd.DataFrame(all_results)
 
@@ -249,7 +254,6 @@ if uploaded_file:
             for i, row in df_upload.iterrows():
                 title = str(row["Title"]).strip()
                 link = row["Link"]
-
                 try:
                     r = requests.get(link, timeout=30)
                     ext = "pdf" if "application/pdf" in r.headers.get("Content-Type","") else "bin"
@@ -257,7 +261,6 @@ if uploaded_file:
                     zip_file.writestr(filename, r.content)
                 except Exception as e:
                     st.warning(f"Failed to download '{title}': {e}")
-
                 progress.progress((i+1)/len(df_upload))
 
         st.download_button(
