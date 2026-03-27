@@ -191,7 +191,7 @@ def scrape_scholar(query, year_low, year_high, max_results):
             
             # STEALTH DELAYS
             # 1. Normal delay between pages
-            time.sleep(random.uniform(12, 25)) 
+            time.sleep(random.uniform(20, 35)) 
             
             # 2. Long "Human Break" every 3 pages
             if (start // 10) % 3 == 0 and start != 0:
