@@ -127,7 +127,7 @@ def scrape_scholar(query, year_low, year_high, max_results):
     session = requests.Session()
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116 Safari/537.36"}
     session.get("https://scholar.google.com", headers=headers)
-    time.sleep(random.uniform(2,4))
+    time.sleep(random.uniform(20,35))
 
     results = []
     progress = st.progress(0)
@@ -159,7 +159,7 @@ def scrape_scholar(query, year_low, year_high, max_results):
                 "Abstract": snippet_tag.text if snippet_tag else ""
             })
         progress.progress(min((start+10)/max_results, 1.0))
-        time.sleep(random.uniform(2,4))
+        time.sleep(random.uniform(20,35))
     return results
 
 # ==========================================
