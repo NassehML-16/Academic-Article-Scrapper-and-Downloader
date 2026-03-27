@@ -45,7 +45,7 @@ def scrape_scholar(query, year_low, year_high, max_results):
     headers = {"User-Agent": "Mozilla/5.0"}
 
     session.get("https://scholar.google.com", headers=headers)
-    time.sleep(random.uniform(30, 45))
+    time.sleep(random.uniform(15, 20))
 
     results = []
     progress = st.progress(0)
