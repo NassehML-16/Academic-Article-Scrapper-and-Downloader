@@ -190,7 +190,24 @@ if start_btn and query:
     if "Scopus (API Key required)" in databases and scopus_key:
         all_results += scrape_scopus(query, max_results, scopus_key)
 
+    # ==========================================
+    # BUILD DATAFRAME — ensure all expected columns exist
+    # ==========================================
+    EXPECTED_COLUMNS = ["Title", "Authors", "Year", "Journal", "Citations", "Link"]
+
+    if not all_results:
+        st.warning("No results returned. Try a different query or database selection.")
+        st.stop()
+
     df = pd.DataFrame(all_results)
+
+    # Add any missing columns with sensible defaults so downstream code never KeyErrors
+    for col in EXPECTED_COLUMNS:
+        if col not in df.columns:
+            df[col] = 0 if col == "Citations" else ""
+
+    # Coerce Citations to numeric (some sources may return None or strings)
+    df["Citations"] = pd.to_numeric(df["Citations"], errors="coerce").fillna(0).astype(int)
 
     # ==========================================
     # DEDUPLICATION
@@ -208,7 +225,7 @@ if start_btn and query:
     # FILTERS
     # ==========================================
     min_cite = st.slider("Minimum Citations", 0, 500, 0)
-    df = df[df["Citations"].fillna(0) >= min_cite]
+    df = df[df["Citations"] >= min_cite]
 
     # ==========================================
     # DISPLAY
