@@ -179,7 +179,7 @@ def scrape_scholar(query, year_low, year_high, max_results):
         session = requests.Session()
         headers = {"User-Agent": "Mozilla/5.0"}
         session.get("https://scholar.google.com", headers=headers, timeout=15)
-        time.sleep(random.uniform(10, 20))
+        time.sleep(random.uniform(20, 35))
 
         progress = st.progress(0)
         for start in range(0, max_results, 10):
